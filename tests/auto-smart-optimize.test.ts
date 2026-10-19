@@ -11,7 +11,9 @@ import {
   buildRawModelLookup,
   processModels,
 } from "../src/models/processing.js";
+import { applyNativeCursorRouting } from "../src/stream/pi-adapter.js";
 import type { CursorModel } from "../src/stream/model-discovery.js";
+import type { ChatCompletionRequest } from "../src/stream/types.js";
 
 const autoSmart: CursorParameterizedModel = {
   name: "auto-smart",
@@ -137,3 +139,63 @@ describe("auto-smart optimize_for picker aliases", () => {
 function augmentedModels(): CursorModel[] {
   return augmentCursorModels([raw("default", "Auto")], [autoSmart]);
 }
+
+describe("auto-smart Shift+Tab optimize_for cycle", () => {
+  it("collapses effort twins into unsuffixed auto-smart without removing aliases", () => {
+    const processed = processModels(augmentedModels());
+    const cycling = processed.find((model) => model.id === "auto-smart");
+
+    expect(cycling).toMatchObject({
+      name: "Auto",
+      supportsEffort: true,
+      requestedModelId: "auto-smart",
+      effortMap: {
+        off: null,
+        minimal: null,
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: null,
+        max: null,
+      },
+    });
+    expect(cycling?.rawRoutingByEffort?.low?.parameters).toEqual([
+      { id: "optimize_for", value: "cost" },
+    ]);
+    expect(cycling?.rawRoutingByEffort?.medium?.parameters).toEqual([
+      { id: "optimize_for", value: "balanced" },
+    ]);
+    expect(cycling?.rawRoutingByEffort?.high?.parameters).toEqual([
+      { id: "optimize_for", value: "intelligence" },
+    ]);
+
+    for (const id of ["auto-smart-cost", "auto-smart-balanced", "auto-smart-intelligence"]) {
+      expect(processed.find((model) => model.id === id)?.supportsEffort).toBe(false);
+    }
+  });
+
+  it("routes Shift+Tab levels onto optimize_for and defaults to Balance", () => {
+    const lookup = buildRawModelLookup(processModels(augmentedModels()));
+
+    const high: ChatCompletionRequest = {
+      model: "auto-smart",
+      messages: [],
+      reasoning_effort: "high",
+    };
+    applyNativeCursorRouting(high, lookup);
+    expect(high.cursor_model_id).toBe("auto-smart");
+    expect(high.cursor_model_parameters).toEqual([{ id: "optimize_for", value: "intelligence" }]);
+
+    const low: ChatCompletionRequest = {
+      model: "auto-smart",
+      messages: [],
+      reasoning_effort: "low",
+    };
+    applyNativeCursorRouting(low, lookup);
+    expect(low.cursor_model_parameters).toEqual([{ id: "optimize_for", value: "cost" }]);
+
+    const untouched: ChatCompletionRequest = { model: "auto-smart", messages: [] };
+    applyNativeCursorRouting(untouched, lookup);
+    expect(untouched.cursor_model_parameters).toEqual([{ id: "optimize_for", value: "balanced" }]);
+  });
+});

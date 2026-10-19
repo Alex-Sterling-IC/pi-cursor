@@ -156,6 +156,22 @@ export function optimizeForLabel(optimizeFor: string | undefined): string | unde
   );
 }
 
+/**
+ * Shift+Tab cycles Pi thinking stops. These three stops carry Cursor's
+ * optimize_for values for the unsuffixed auto-smart row. The named aliases
+ * (auto-smart-cost, -balanced, -intelligence) stay separate models.
+ */
+const OPTIMIZE_FOR_THINKING_EFFORT: Record<string, string> = {
+  cost: "low",
+  balanced: "medium",
+  intelligence: "high",
+};
+
+export function optimizeForThinkingEffort(optimizeFor: string | undefined): string | undefined {
+  if (!optimizeFor) return undefined;
+  return OPTIMIZE_FOR_THINKING_EFFORT[optimizeFor.toLowerCase()];
+}
+
 export function maxModeIdPart(
   modelName: string,
   context: string | undefined,
@@ -345,6 +361,93 @@ export function shouldGenerateSyntheticMaxRows(
   return model.supportsMaxMode === true && !variant.isMaxMode;
 }
 
+/**
+ * Effort-suffixed twins of optimize_for variants. processModels collapses
+ * auto-smart-low/medium/high into one auto-smart row whose thinkingLevelMap
+ * routes Shift+Tab onto optimize_for=cost/balanced/intelligence.
+ */
+function optimizeForThinkingRows(
+  model: CursorParameterizedModel,
+  variants: CursorParameterizedVariant[],
+  requestedMaxMode: boolean,
+): CursorModel[] {
+  const first = variants[0];
+  if (!first) return [];
+  if (requestedMaxMode && !first.isMaxMode && !model.supportsMaxMode) return [];
+
+  const context = parameterValue(first.parameters, "context");
+  const fast = parameterValue(first.parameters, "fast") === "true";
+  const thinking = parameterValue(first.parameters, "thinking") === "true";
+  const baseId = `${model.name}${contextIdPart(context)}${maxModeIdPart(model.name, context, requestedMaxMode, false)}`;
+  const name = [
+    model.clientDisplayName || model.name,
+    contextLabel(context),
+    maxModeLabel(model.name, context, requestedMaxMode, false),
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const contextWindow = clampCursorContextWindow(
+    model.name,
+    model.clientDisplayName || model.name,
+    contextWindowFromParameter(
+      context,
+      requestedMaxMode
+        ? (model.contextTokenLimitForMaxMode ?? model.contextTokenLimit ?? 200_000)
+        : (model.contextTokenLimit ?? 200_000),
+    ),
+  );
+
+  return variants.flatMap((variant) => {
+    const effort = optimizeForThinkingEffort(parameterValue(variant.parameters, "optimize_for"));
+    if (!effort) return [];
+    const parameters = variant.parameters.map((parameter) => ({
+      id: parameter.id,
+      value: parameter.value,
+    }));
+    if (!hasVariantParameterSet(model, parameters)) return [];
+    const id = `${baseId}-${effort}${thinking ? "-thinking" : ""}${fast ? "-fast" : ""}`;
+    return [
+      {
+        id,
+        name,
+        reasoning: true,
+        contextWindow,
+        maxTokens: inferCursorMaxOutputTokens(id, name),
+        requestedModelId: model.name,
+        requiresMaxMode: variant.isMaxMode,
+        requestedMaxMode,
+        supportsImages: model.supportsImages,
+        parameters,
+      } satisfies CursorModel,
+    ];
+  });
+}
+
+function appendOptimizeForThinkingRows(model: CursorParameterizedModel, rows: CursorModel[]): void {
+  const groups = new Map<string, CursorParameterizedVariant[]>();
+  for (const variant of model.variants) {
+    if (metadataEffortParameterId(variant)) continue;
+    if (!optimizeForThinkingEffort(parameterValue(variant.parameters, "optimize_for"))) continue;
+    const withoutOptimizeFor = {
+      ...variant,
+      parameters: variant.parameters.filter((parameter) => parameter.id !== "optimize_for"),
+    };
+    const key = parameterGroupKey(withoutOptimizeFor);
+    const group = groups.get(key) ?? [];
+    group.push(variant);
+    groups.set(key, group);
+  }
+
+  for (const variants of groups.values()) {
+    const first = variants[0];
+    if (!first) continue;
+    rows.push(...optimizeForThinkingRows(model, variants, first.isMaxMode));
+    if (shouldGenerateSyntheticMaxRows(model, first)) {
+      rows.push(...optimizeForThinkingRows(model, variants, true));
+    }
+  }
+}
+
 export function modelsFromParameterizedMetadata(
   parameterizedModels: CursorParameterizedModel[],
 ): CursorModel[] {
@@ -385,6 +488,7 @@ export function modelsFromParameterizedMetadata(
         );
       }
     }
+    appendOptimizeForThinkingRows(model, rows);
   }
   return rows;
 }
