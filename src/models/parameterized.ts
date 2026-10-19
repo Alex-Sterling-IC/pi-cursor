@@ -136,6 +136,26 @@ export function contextLabel(context: string | undefined): string | undefined {
   return context.toUpperCase();
 }
 
+/** Cursor Auto (`auto-smart`) optimize_for picker labels. */
+const OPTIMIZE_FOR_LABELS: Record<string, string> = {
+  cost: "Cost",
+  balanced: "Balance",
+  intelligence: "Intelligence",
+};
+
+export function optimizeForIdPart(optimizeFor: string | undefined): string {
+  return optimizeFor ? `-${optimizeFor.toLowerCase()}` : "";
+}
+
+export function optimizeForLabel(optimizeFor: string | undefined): string | undefined {
+  if (!optimizeFor) return undefined;
+  const normalized = optimizeFor.toLowerCase();
+  return (
+    OPTIMIZE_FOR_LABELS[normalized] ??
+    optimizeFor.replace(/-/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+  );
+}
+
 export function maxModeIdPart(
   modelName: string,
   context: string | undefined,
@@ -169,7 +189,8 @@ export function parameterizedBaseId(
   hasEffortParameter: boolean,
 ): string {
   const context = parameterValue(variant.parameters, "context");
-  return `${modelName}${contextIdPart(context)}${maxModeIdPart(modelName, context, requestedMaxMode, hasEffortParameter)}`;
+  const optimizeFor = parameterValue(variant.parameters, "optimize_for");
+  return `${modelName}${contextIdPart(context)}${optimizeForIdPart(optimizeFor)}${maxModeIdPart(modelName, context, requestedMaxMode, hasEffortParameter)}`;
 }
 
 export function parameterizedBaseLabel(
@@ -179,9 +200,11 @@ export function parameterizedBaseLabel(
   hasEffortParameter: boolean,
 ): string[] {
   const context = parameterValue(variant.parameters, "context");
+  const optimizeFor = parameterValue(variant.parameters, "optimize_for");
   return [
     model.clientDisplayName || model.name,
     contextLabel(context),
+    optimizeForLabel(optimizeFor),
     maxModeLabel(model.name, context, requestedMaxMode, hasEffortParameter),
   ].filter(Boolean) as string[];
 }
